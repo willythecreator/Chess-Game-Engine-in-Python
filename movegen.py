@@ -65,6 +65,66 @@ def slider_attacks(sq, occupancy, deltas):
             nr += dr
     return attacks
 
+def is_in_check(board, side):
+    king_piece = 'K' if side == 'w' else 'k'
+    bb = board.bitboard[king_piece]
+    if bb == 0:
+        return False
+    king_sq = (bb & -bb).bit_length() - 1
+    enemy = 'b' if side == 'w' else 'w'
+    occ = board.all_occupied()
+
+    enemy_n = 'N' if enemy == 'w' else 'n'
+    if KNIGHT_ATTACKS[king_sq] & board.bitboards[enemy_n]:
+        return True
+
+    enemy_k = 'K' if enemy == 'w' else 'k'
+    if KING_ATTACKS[king_sq] & board.bitboards[enemy_n]:
+        return True
+
+    enemy_k = 'K' if enemy == 'w' else 'k'
+    if KING_ATTACKS[king_sq] & board.bitboards[enemy_k]:
+        return True
+
+    enemy_p = 'P' if enemy == 'w' else 'p'
+    if PAWN_ATTACKS[side][king_sq] & board.bitboards[enemy_p]:
+        return True
+
+    enemy_r = 'R' if enemy == 'w' else 'r'
+    enemy_q = 'Q' if enemy == 'w' else 'q'
+    if slider_attacks(king_sq, occ, DIRECTIONS['rook']) & (board.bitboards[enemy_r] | board.bitboards[enemy_q]):
+        return True
+
+    enemy_b = 'B' if enemy == 'w' else 'b'
+    if slider_attacks(king_sq, occ, DIRECTIONS['bishop']) & (board.bitboards[enemy_b] | board.bitboards[enemy_q]):
+        return True
+
+    return False
+
+def apply_move_temp(board, move):
+    # Apply a move and return the modified bitboards + ep + side so we can undo
+    import copy
+    bbs = {k: v for k, v in board.bitboards.items()}
+    piece = move.piece
+
+    bbs[piece] &= ~(1 << move.from_sq)
+
+    if move.captured:
+        bbs[move.captured] &= ~(1 << move.to_sq)\
+        
+    if move.en_passant:
+        bbs[move.captured] &= ~(1 << move.to_sq)
+
+    if move.en_passant:
+        ep_dir = -8 if board.side == 'w' else 8
+        ep_victim = 'p' if board.side == 'w' else 'P'
+        bbs[ep_victim] &= (~1 << (move.to_sq + ep_dir))
+
+    target = move.promotion if move.promotion else piece
+    bbs[target] |= 1 << move.to_sq
+
+    return bbs
+
 def generate_moves(board):
     moves = []
     side = board.side
@@ -161,5 +221,4 @@ def generate_moves(board):
                             break
                     moves.append(Move(from_sq, to_sq, piece_char, captured))
 
-    return moves
-                        
+    return moves                 
