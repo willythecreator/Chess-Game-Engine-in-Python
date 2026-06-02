@@ -135,12 +135,10 @@ def generate_moves(board):
 
     # Loop through each piece type for this side
     for piece_char in ('P', 'N', 'B', 'R', 'Q', 'K') if side == 'w' else ('p', 'n', 'b', 'r', 'q', 'k'):
-        if side == 'b':
-            piece_char = piece_char.lower()
         bb = board.bitboards[piece_char]
         while bb:
-            from_sq = (bb & -bb).bit_length() - 1 #pop LSB
-            bb &= bb - 1 #clear that bit
+            from_sq = (bb & -bb).bit_length() - 1
+            bb &= bb - 1
 
             if piece_char.upper() == 'N':
                 targets = KNIGHT_ATTACKS[from_sq] & ~own_occ
@@ -154,61 +152,52 @@ def generate_moves(board):
                                 captured = ep
                                 break
                     moves.append(Move(from_sq, to_sq, piece_char, captured))
-                # Castling - later
 
-            elif piece_char.upper() == 'P':
-                # Pawn moves
+            elif piece_char.upper() == 'p':
                 direction = 1 if side == 'w' else -1
                 start_rank = 1 if side == 'w' else 6
                 prom_rank = 6 if side == 'w' else 1
 
-                # Single
                 to_sq = from_sq + 8 * direction
                 if not (all_occ & (1 << to_sq)):
                     if rank_of(from_sq) == prom_rank:
                         for prom in ('Q', 'R', 'B', 'N') if side == 'w' else ('q', 'r', 'b', 'n'):
                             moves.append(Move(from_sq, to_sq, piece_char, promotion=prom))
                     else:
-                        moves.append(Move(from_sq, to_sq, piece_char, double_push=abs(rank_of(from_sq) - start_rank) == 1))
-
-                    # Double push
+                        moves.append(Move(from_sq, to_sq, piece_char,
+                                          double_push=abs(rank_of(from_sq) - start_rank) == 1))
                     if rank_of(from_sq) == start_rank:
                         to_sq2 = from_sq + 16 * direction
                         if not (all_occ & (1 << to_sq2)):
                             moves.append(Move(from_sq, to_sq2, piece_char, double_push=True))
 
-                # Captures
-                pawn_caps = PAWN_ATTACKS[side][from_sq]
+                    pawn_caps = PAWN_ATTACKS[side][from_sq]
+                    targets = pawn_caps & enemy_occ
+                    while targets:
+                        to_sq = (targets & -targets).bit_length() - 1
+                        targets &= targets - 1
+                        captured = None
+                        for ep, eb in board.bitboards.items():
+                            if (eb >> to_sq) & 1:
+                                captured = ep
+                                break
+                        if rank_of(from_sq) == prom_rank:
+                            for prom in ('Q', 'R', 'B', 'N') if side == 'w' else ('q','r','b','n'):
+                                moves.append(Move(from_sq, to_sq, piece_char, captured, promotion=prom))
+                        else:
+                            moves.append(Move(from_sq, to_sq, piece_char, captured))
 
-                #Normal captures
-                targets = pawn_caps & enemy_occ
-                while targets:
-                    to_sq = (targets & -targets).bit_length() - 1
-                    targets &= targets - 1
-                    captured = None
-                    for ep, eb in board.bitboards.items():
-                        if (eb >> to_sq) & 1:
-                            captured = ep
-                            break
-                    if rank_of(from_sq) == prom_rank:
-                        for prom in ('Q', 'R', 'B', 'N') if side == 'w' else ('q', 'r', 'b', 'n'):
-                            moves.append(Move(from_sq, to_sq, piece_char, captured, promotion=prom))
-                    else:
-                        moves.append(Move(from_sq, to_sq, piece_char, captured))
-
-                # En passant
-                if board.ep != -1:
-                    ep_caps = pawn_caps & (1 << board.ep)
-                    if ep_caps:
-                        to_sq = board.ep
-                        moves.append(Move(from_sq, to_sq, piece_char, en_passant=True))
+                    if board.ep != -1:
+                        ep_caps = pawn_caps & (1 << board.ep)
+                        if ep_caps:
+                            moves.append(Move(from_sq, board.ep, piece_char, en_passant=True))
 
             elif piece_char.upper() in ('B', 'R', 'Q'):
                 if piece_char.upper() == 'B':
                     deltas = DIRECTIONS['bishop']
                 elif piece_char.upper() == 'R':
                     deltas = DIRECTIONS['rook']
-                else: # Queen
+                else:
                     deltas = DIRECTIONS['bishop'] + DIRECTIONS['rook']
                 targets = slider_attacks(from_sq, all_occ, deltas) & ~own_occ
                 while targets:
@@ -217,8 +206,45 @@ def generate_moves(board):
                     captured = None
                     if enemy_occ & (1 << to_sq):
                         for ep, eb in board.bitboards.items():
-                            captured = ep
-                            break
+                            if (eb >> to_sq) & 1:
+                                captured = ep
+                                break
                     moves.append(Move(from_sq, to_sq, piece_char, captured))
 
-    return moves                 
+            elif piece_char.upper() == 'K':
+                targets = KING_ATTACKS[from_sq] & ~own_occ 
+                while targets:
+                    to_sq = (targets & -targets).bit_length() - 1
+                    tarhets &= targets - 1
+                    captured = None
+                    if enemy_occ & (1 << to_sq):
+                        for ep, eb in board.bitboards.items():
+                            if (eb >> to_sq) & 1:
+                                captured = ep
+                                break
+                    moves.append(Move(from_sq, to_sq, piece_char, captured))
+
+    # Filter: remove moves that leave own king in check
+    legal = []
+    for move in moves:
+        saved_bbs = {k: v for k, v in board.bitboards.items()}
+        saved_ep = board.ep
+        saved_side = board.side
+
+        # Apply move temporarily
+        new_bbs = apply_move_temp(board, move)
+        board.bitboards = new_bbs
+        board.side = enemy if side == 'w' else 'w' # flip to check from side's perspective
+
+        # Check if own king is still in check after the move
+        board.side = side
+        still_in_check = is_in_check(board, side)
+
+        # Restore
+        board.bitboards = saved_bbs
+        board.ep = saved_ep
+        board.side = saved_side
+
+        if not still_in_check:
+            legal.append(move)
+    return

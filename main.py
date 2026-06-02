@@ -616,6 +616,68 @@ class ChessGUI:
         self.all_moves = generate_moves(self.board)
         self._update_check()
 
+        # Check for checkmate or stalemate
+        if len(self.all_moves) == 0:
+            self.root.after(100, self._show_game_over)
+
+    def _show_game_over(self):
+        is_check = self.in_check
+        title = "Checkmate" if is_check else "Stalemate"
+        msg = ("Checkmate, game over bitch" if is_check
+               else "Stalemate, draw bitch")
+        
+        dlg = tk.Toplevel(self.root)
+        dlg.title(title)
+        dlg.configure(bg=PANEL_BG)
+        dlg.resizable(False, False)
+        dlg.grab_set()
+        dlg.transient(self, root)
+
+        DLG_W, DLG_H = 320, 160
+        self.root.update_idletasks()
+        rx = self.root.winfo_rootx() + (WIN_W - DLG_W)//2
+        ry = self.root.winfo_rooty() + (WIN_H - DLG_H)//2
+        dlg.geometry(f"{DLG_W}x{DLG_H}+{rx}+{ry}")
+
+        col=CHECK_COL if is_check else ACCENT
+        tk.Label(dlg, text=title, bg=PANEL_BG, fg=col,
+                 font=("Courier", 18, "bold")).pack(pady=(20, 4))
+        tk.Label(dlg, text=msg, bg=PANEL_BG, fg=TEXT_SUB,
+                 font=("Coursier", 10)).pack(pady=(0, 16))
+        
+        btn_frame = tk.Frame(dlg, bg=PANEL_BG)
+        btn_frame.pack()
+
+        def restart():
+            dlg.destroy()
+            self._restart()
+
+        def quit_game():
+            self.root.destroy()
+
+        tk.Button(btn_frame, text="Restart", bg=ACCENT, fg="#ffffff",
+                  font=("Courier", 10, "bold"), relief="flat",
+                  padx=16, pady=6, cursor="hand2", command=restart).pack(side=tk.LEFT, padx=8)
+        
+        tk.Button(btn_frame, text="Exit", bg="#2a1a1a", fg=TEXT_MAIN,
+                  padx=16, pady=6, cursor="hand2",
+                  command=quit_game).pack(side=tk.LEFT, padx=8)
+        
+    def _restart(self):
+        self.board = Board()
+        self.selected_sq = None
+        self.legal_moves = []
+        self.arrows = []
+        self.highlighted = set()
+        self.drag_piece = None
+        self.drag_sq = None
+        self.is_draggin = False
+        self.notation = []
+        self.in_check = False
+        self.king_sq = None
+        self.all_moves = generate_moves(self.board)
+        self._update_check()
+        self.redraw()
 
 if __name__ == '__main__':
     root = tk.Tk()
