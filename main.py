@@ -5,6 +5,8 @@ from move import Move
 from PIL import Image, ImageTk, ImageDraw
 import math
 import os
+from search import find_best_move
+import threading
 
 SQ       = 80
 BOARD_PX = SQ * 8
@@ -70,6 +72,8 @@ class ChessGUI:
         self.notation    = []
         self.in_check    = False
         self.king_sq     = None
+        self.engine_elo = None
+        self.chilli_thinking = False
 
         self.player_photo = None
         self._build_ui()
@@ -381,7 +385,9 @@ class ChessGUI:
             y += 24
 
     def _draw_player_cards(self):
-        self._draw_card(self.top_panel, "Chilli", "???",   is_chilli=True)
+        elo_str = str(self.engine_elo) if self.engine_elo is not None else "???"
+        status = " (thinking...)" if self.chilli_thinking else ""
+        self._draw_card(self.top_panel, "Chilli", elo_str + status,   is_chilli=True)
         self._draw_card(self.bot_panel, "You",    "Human", is_chilli=False)
 
     def _draw_card(self, panel, name, rating, is_chilli):
@@ -426,6 +432,9 @@ class ChessGUI:
         if sq is None:
             return
 
+        if self.board.side == 'b' or self.chilli_thinking:
+            return
+
         if self.selected_sq is not None and not self.is_dragging:
             move = self._find_move(self.selected_sq, sq)
             if move:
@@ -440,6 +449,8 @@ class ChessGUI:
                 self.drag_piece  = None
                 self.drag_sq     = None
                 self.redraw()
+                if self.board.side == 'b':
+                    self.root.after(300, self._chilli_move)
                 return
 
         piece_here = self._piece_at(sq)
@@ -456,6 +467,9 @@ class ChessGUI:
             self.drag_piece  = None
             self.drag_sq     = None
         self.redraw()
+        if self.board.side == 'b':
+            self.root.after(300, self._chilli_move)
+        return
 
     def _on_drag_motion(self, event):
         if self.drag_piece is None:
@@ -489,11 +503,15 @@ class ChessGUI:
         self.drag_sq     = None
         self.is_dragging = False
         self.redraw()
+        if self.board.side == 'b':
+            self.root.after(300, self._chilli_move)
 
     def _on_right_press(self, event):
         sq = self._xy_to_sq(event.x, event.y)
         self.arrow_start = sq
         self._arrow_cur  = sq
+        self.selected_sq = None
+        self.legal_moves = []
 
     def _on_right_drag(self, event):
         sq = self._xy_to_sq(event.x, event.y)
@@ -736,6 +754,40 @@ class ChessGUI:
         self.all_moves = generate_moves(self.board)
         self._update_check()
         self.redraw()
+
+    def _chilli_move(self):
+        # Run Chilli's search in a background thread so UI doesn't freeze
+        if self.board.side != 'b':
+            return
+        if self.chilli_thinking:
+            return
+
+        self.chilli_thinking = True
+        self.redraw()
+
+        def think():
+            import copy
+            board_copy = copy.deepcopy(self.board)
+            move, depth, score = find_best_move(board_copy, max_depth=6, time_limit=5.0)
+
+            # Update ELO estimate based on depth reached
+            elo_by_depth = {1:600, 2:800, 3:1000, 4:1300, 5:1600, 6:1900}
+            self.engine_elo = elo_by_depth.get(depth, 1900)
+
+            def apply():
+                self.chilli_thinking = False
+                if move:
+                    self._apply_move(move)
+                    self.selected_sq = None
+                    self.legal_moves = []
+                    self.arrows = []
+                    self.highlighted = set()
+                self.redraw()
+
+            self.root.after(0, apply)
+
+        thread = threading.Thread(target=think, daemon=True)
+        thread.start()
 
 if __name__ == '__main__':
     root = tk.Tk()
