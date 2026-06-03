@@ -71,9 +71,11 @@ class ChessGUI:
         self.in_check    = False
         self.king_sq     = None
 
+        self.player_photo = None
         self._build_ui()
         self._load_images()
         self._load_chilli()
+        self._load_player()
         self.all_moves = generate_moves(self.board)
         self._update_check()
         self.redraw()
@@ -127,11 +129,13 @@ class ChessGUI:
         self.chilli_photo = None
         AVATAR = 56
         candidates = [
+            '/mnt/c/Coding/Game Chess Engine in Python/assets/1000_F_299092735_QX6RymeVU6mqysm1bVyFmKo9YtI3C89T.jpg',
             r'C:\Coding\Game Chess Engine in Python\assets\1000_F_299092735_QX6RymeVU6mqysm1bVyFmKo9YtI3C89T.jpg',
             'assets/chilli.jpg',
             'assets/chilli.png',
         ]
         for path in candidates:
+            print(f"Trying: {path} -> exists: {os.path.exists(path)}")
             if os.path.exists(path):
                 try:
                     img = Image.open(path).convert("RGBA")
@@ -141,6 +145,29 @@ class ChessGUI:
                                      (w+side)//2, (h+side)//2))
                     img  = img.resize((AVATAR, AVATAR), Image.LANCZOS)
                     self.chilli_photo = ImageTk.PhotoImage(img)
+                    print(f"Loaded successfully: {path}")
+                    break
+                except Exception as e:
+                    print(f"Failed to load: {e}")
+
+    def _load_player(self):
+        self.player_photo = None
+        AVATAR = 56
+        candidates = [
+            r'C:\Coding\Game Chess Engine in Python\assets\1000_F_299092735_QX6RymeVU6mqysm1bVyFmKo9YtI3C89T.jpg',
+            'assets/player.jpg',
+            'assets/player.png',
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                try:
+                    img = Image.open(path).convert("RGBA")
+                    w, h = img.size
+                    side = min(w, h)
+                    img = img.crop(((w-side)//2, (h-side)//2,
+                                    (w+side)//2, (h+side)//2))
+                    img = img.resize((AVATAR, AVATAR), Image.LANCZOS)
+                    self.player_photo = ImageTk.PhotoImage(img)
                     break
                 except Exception:
                     pass
@@ -370,13 +397,14 @@ class ChessGUI:
             panel.create_image(ax, ay, image=self.chilli_photo, anchor="nw")
             panel.create_rectangle(ax, ay, ax+AVATAR, ay+AVATAR,
                 outline=ACCENT, width=1, fill="")
+            
         else:
-            col  = "#12203a" if is_chilli else "#0a1628"
+            col = "#12203a" if is_chilli else "#0a1628"
             char = name[0].upper() if is_chilli else "?"
             panel.create_rectangle(ax, ay, ax+AVATAR, ay+AVATAR,
-                fill=col, outline=ACCENT2, width=1)
+                                   fill=col, outline=ACCENT2, width=1)
             panel.create_text(ax+AVATAR//2, ay+AVATAR//2, text=char,
-                fill=ACCENT2, font=("Courier", 22, "bold"), anchor="center")
+                              fill=ACCENT2, font=("Courier", 22, "bold"), anchor="center")
 
         tx = ax + AVATAR + 14
         panel.create_text(tx, PANEL_H//2 - 12, text=name,
@@ -601,6 +629,28 @@ class ChessGUI:
         if move.captured:
             b.bitboards[move.captured] &= ~(1 << move.to_sq)
 
+        if move.castling:
+            if move.to_sq == 6: # white kingside
+                b.bitboards['R'] &= ~(1 << 7)
+                b.bitboards['R'] |= (1 << 5)
+                b.castling &= ~0b1100
+
+            elif move.to_sq == 2: # white queenside
+                b.bitboards['R'] &= ~(1 << 0)
+                b.bitboards['R'] |= (1 << 3)
+                b.castling &= ~0b1100
+
+            elif move.to_sq == 62: # black kingside
+                b.bitboards['r'] &= ~(1 << 63)
+                b.bitboards['r'] |= (1 << 61)
+                b.castling &= ~0b0011
+
+            elif move.to_sq == 58: # black queenside
+                b.bitboards['r'] &= ~(1 << 56)
+                b.bitboards['r'] |= (1 << 59)
+                b.castling &= ~0b0011
+            
+
         if move.en_passant:
             ep_dir = -8 if b.side == 'w' else 8
             b.bitboards['p' if b.side == 'w' else 'P'] &= ~(1 << (move.to_sq + ep_dir))
@@ -612,6 +662,14 @@ class ChessGUI:
         b.side = 'b' if b.side == 'w' else 'w'
         if b.side == 'w':
             b.fullmove += 1
+
+        # Update castling rights
+        if piece == 'K': b.castling &= ~0b1100
+        if piece == 'k': b.castling &= ~0b0011
+        if move.from_sq == 0: b.castling &= ~0b0100 # white queenside rook
+        if move.from_sq == 7: b.castling &= ~0b1000 # white kingside rook 
+        if move.from_sq == 56: b.castling &= ~0b0001 # black queenside rook
+        if move.from_sq == 63: b.castling &= ~0b0010 # black kingside rook
 
         self.all_moves = generate_moves(self.board)
         self._update_check()
@@ -631,7 +689,7 @@ class ChessGUI:
         dlg.configure(bg=PANEL_BG)
         dlg.resizable(False, False)
         dlg.grab_set()
-        dlg.transient(self, root)
+        dlg.transient(self.root)
 
         DLG_W, DLG_H = 320, 160
         self.root.update_idletasks()
@@ -643,7 +701,7 @@ class ChessGUI:
         tk.Label(dlg, text=title, bg=PANEL_BG, fg=col,
                  font=("Courier", 18, "bold")).pack(pady=(20, 4))
         tk.Label(dlg, text=msg, bg=PANEL_BG, fg=TEXT_SUB,
-                 font=("Coursier", 10)).pack(pady=(0, 16))
+                 font=("Courier", 10)).pack(pady=(0, 16))
         
         btn_frame = tk.Frame(dlg, bg=PANEL_BG)
         btn_frame.pack()
@@ -671,7 +729,7 @@ class ChessGUI:
         self.highlighted = set()
         self.drag_piece = None
         self.drag_sq = None
-        self.is_draggin = False
+        self.is_dragging = False
         self.notation = []
         self.in_check = False
         self.king_sq = None
