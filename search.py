@@ -8,8 +8,12 @@ TT_EXACT = 0
 TT_ALPHA = 1
 TT_BETA = 2
 
-MAX_DEPTH = 6 # iterative deeping goes up to this
+MAX_DEPTH = 7 # iterative deeping goes up to this
 QUIESCE_DEPTH = 4
+killers = [[None, None] for _ in range(MAX_DEPTH + 1)]
+
+_search_start = 0.0
+_time_limit = 5.0
 
 def _board_hash(board):
     # Simple hash of the board state
@@ -20,7 +24,7 @@ def _board_hash(board):
         board.castling,
     )
 
-def _move_score(move, board):
+def _move_score(move, board, depth=0):
     # Score a move for ordering - higher = seatch first
     score = 0
     if move.captured:
@@ -38,6 +42,11 @@ def _move_score(move, board):
         score += 900
     if move.castling:
         score += 60
+    if not move.captured:
+        if killers[depth][0] is not None and move == killers[depth][0]:
+            score += 80
+        elif killers[depth][1] is not None and move == killers[depth][1]:
+            score += 70
     return score
 
 def _apply_move(board, move):
@@ -129,6 +138,8 @@ def quiesce(board, alpha, beta, depth=QUIESCE_DEPTH):
     return alpha
 
 def alphabeta(board, depth, alpha, beta, maximizing):
+    if time.time() - _search_start > _time_limit:
+        return 0
     # Alpha-beta minimax with transposition table
     key = _board_hash(board)
 
@@ -149,14 +160,9 @@ def alphabeta(board, depth, alpha, beta, maximizing):
     
     moves = generate_moves(board)
 
-    if not moves:
-        if is_in_check(board, board.side):
-            return -99999 + (MAX_DEPTH - depth) # checkmate
-        return 0 # stalemate
-    
-    moves.sort(key=lambda m: _move_score(m, board), reverse=True)
-
-    if depth >= 3 and not is_in_check(board, board.side):
+    non_pawn = sum(bin(v).count('1') for k, v in board.bitboards.items()
+                   if k not in ('P', 'p', 'K', 'k'))
+    if depth >= 3 and not is_in_check(board, board.side) and non_pawn > 2:
         saved = _save(board)
         board.side = 'b' if board.side == 'w' else 'w'
         score = -alphabeta(board, depth - 3, -beta, -beta + 1, not maximizing)
@@ -168,20 +174,32 @@ def alphabeta(board, depth, alpha, beta, maximizing):
     original_alpha = alpha
     best_score = -100000
 
-    for move in moves:
+    for i, move in enumerate(moves):
         saved = _save(board)
         _apply_move(board, move)
-        score = -alphabeta(board, depth-1, -beta, -alpha, not maximizing)
+
+        # LMR: reduce depth for late quiet moves
+        reduction = 0
+        if depth >= 3 and i >= 3 and not move.captured and not move.promotion:
+            reduction = 1 if i < 6 else 2
+
+        score = -alphabeta(board, depth - 1 - reduction, -beta, -alpha, not maximizing)
+
+        # re-search at full depth if it raised alpha
+        if reduction and score > alpha:
+            score = -alphabeta(board, depth - 1, -beta, -alpha, not maximizing)
+
         _undo_move(board, move, saved)
 
         if score > best_score:
             best_score = score
-
         if score > alpha:
             alpha = score
-
         if alpha >= beta:
-            # Beta cutoff
+            if not move.captured:
+                if killers[depth][0] is None or killers[depth][0] != move:
+                    killers[depth][1] = killers[depth][0]
+                    killers[depth][0] = move
             tt_flag = TT_BETA
             TRANSPOSITION_TABLE[key] = (depth, tt_flag, beta)
             return beta
@@ -194,11 +212,14 @@ def alphabeta(board, depth, alpha, beta, maximizing):
     TRANSPOSITION_TABLE[key] = (depth, tt_flag, best_score)
     return best_score
 
-def find_best_move(board, max_depth=MAX_DEPTH, time_limit=5.0):
+def find_best_move(board, max_depth=MAX_DEPTH, time_limit=10.0):
     # Iterative deeping search
     # Returns (best_move, depth_reached, score)
-
     TRANSPOSITION_TABLE.clear()
+
+    global _search_start, _time_limit
+    _search_start = time.time()
+    _time_limit = time_limit
 
     best_move = None
     best_score = -100000
@@ -209,16 +230,22 @@ def find_best_move(board, max_depth=MAX_DEPTH, time_limit=5.0):
         return None, 0, 0
     
     # Sort captures first for better pruning at root
-    moves.sort(key=lambda m: _move_score(m, board), reverse=True)
+    moves.sort(key=lambda m: _move_score(m, board, 0), reverse=True)
 
     for depth in range(1, max_depth + 1):
         if time.time() - start > time_limit:
             break
 
+        if depth >= 2 and best_score != -100000:
+            asp = 50
+            alpha = best_score - asp
+            beta = best_score + asp
+        else:
+            alpha = -100000
+            beta = 100000
+
         current_best_move = None
         current_best_score = -100000
-        alpha = -100000
-        beta = 100000
 
         for move in moves:
             saved = _save(board)
@@ -226,10 +253,16 @@ def find_best_move(board, max_depth=MAX_DEPTH, time_limit=5.0):
             score = -alphabeta(board, depth-1, -beta, -alpha, False)
             _undo_move(board, move, saved)
 
+            # if score falls outside the window, re-search with full window
+            if score <= (best_score - asp if depth >= 2 else -100000) or score >= beta:
+                full_saved = _save(board)
+                _apply_move(board, move)
+                score = -alphabeta(board, depth - 1, -100000, 100000, False)
+                _undo_move(board, move, full_saved)
+
             if score > current_best_score:
                 current_best_score = score
                 current_best_move = move
-
             if score > alpha:
                 alpha = score
 
@@ -248,5 +281,6 @@ def find_best_move(board, max_depth=MAX_DEPTH, time_limit=5.0):
 
         if abs(best_score) > 90000:
             break # found checkmate
-
+        
+    print(f"Estimated ELO: ~1900")
     return best_move, depth, best_score
